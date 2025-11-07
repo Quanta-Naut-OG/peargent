@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "peargent"
+version = "0.1.0"
+description = "A lightweight agentic AI library"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Tarun Kumar" }
+]
+dependencies = [
+    "requests>=2.31", 
+    "python-dotenv>=1.0"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/tarun-kumar/peargent"
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "flake8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["peargent*"]
