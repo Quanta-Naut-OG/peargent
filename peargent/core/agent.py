@@ -342,8 +342,420 @@ class Agent:
             
             if tracer and tracer.enabled and trace:
                 tracer.end_trace(trace.trace_id, error=e)
-                
+
             raise e
+
+    def stream(self, input_data: str):
+        """
+        Stream the agent's response in real-time, yielding text chunks.
+
+        This is a simple streaming interface that just yields text chunks
+        as they arrive from the model. For richer updates with metadata,
+        use observe() instead.
+
+        Args:
+            input_data: User input/query
+
+        Yields:
+            String chunks of the agent's response
+
+        Example:
+            for chunk in agent.stream("Tell me a story"):
+                print(chunk, end="", flush=True)
+        """
+        # Check if model supports streaming
+        if not hasattr(self.model, 'stream'):
+            # Fallback to non-streaming
+            result = self.run(input_data)
+            yield result
+            return
+
+        # Initialize
+        self.temporary_memory = []
+
+        # Trace initialize
+        trace = None
+        tracer = get_tracer() if self.tracing else None
+        if tracer and tracer.enabled:
+            from peargent.observability import get_session_id, get_user_id
+            session_id = get_session_id()
+            user_id = get_user_id()
+
+            trace_id = tracer.start_trace(
+                agent_name=self.name,
+                input_data=input_data,
+                session_id=session_id,
+                user_id=user_id
+            )
+            trace = tracer.get_trace(trace_id)
+
+        # Ensure thread exists if using history
+        if self.history and not self.history.current_thread_id:
+            self.history.create_thread(f"{self.name}_thread")
+
+        # Add user message to memory
+        self.temporary_memory.append({
+            "role": "user",
+            "content": input_data
+        })
+
+        # Build initial prompt
+        prompt = self._build_initial_prompt(input_data)
+
+        # Start span for streaming
+        span = None
+        if tracer and tracer.enabled:
+            span = tracer.start_span(SpanType.LLM_CALL, "LLM Call (streaming)")
+
+        try:
+            # Collect the full response while streaming
+            full_response = ""
+
+            # Stream the response
+            for chunk in self.model.stream(prompt):
+                full_response += chunk
+                yield chunk
+
+            # Add to temporary memory
+            self.temporary_memory.append({
+                "role": "assistant",
+                "content": full_response
+            })
+
+            # Track tokens and cost
+            if span:
+                cost_tracker = get_cost_tracker()
+                model_name = getattr(self.model, 'model_name', None) or getattr(self.model, 'model', 'unknown')
+                try:
+                    prompt_tokens, completion_tokens, cost = cost_tracker.count_and_calculate(
+                        prompt=prompt,
+                        completion=full_response,
+                        model=model_name
+                    )
+                    span.set_llm_data(prompt=prompt, response=full_response, model=model_name)
+                    span.set_tokens(prompt_tokens, completion_tokens, cost)
+                except Exception:
+                    span.set_llm_data(prompt=prompt, response=full_response, model=model_name)
+
+            # End span
+            if tracer and tracer.enabled and span:
+                tracer.end_span()
+
+            # Sync to history
+            self._sync_to_history()
+
+            # End trace
+            if tracer and tracer.enabled and trace:
+                tracer.end_trace(trace.trace_id, output=full_response)
+
+        except Exception as e:
+            # End span with error
+            if tracer and tracer.enabled and span:
+                tracer.end_span(error=e)
+
+            # Sync history even on error
+            self._sync_to_history()
+
+            # End trace with error
+            if tracer and tracer.enabled and trace:
+                tracer.end_trace(trace.trace_id, error=e)
+
+            raise e
+
+    def stream_observe(self, input_data: str):
+        """
+        Stream agent execution with rich updates and metadata.
+
+        Unlike stream() which only yields text chunks, stream_observe() yields
+        StreamUpdate objects with metadata like tokens, cost, timing, etc.
+
+        Args:
+            input_data: User input/query
+
+        Yields:
+            StreamUpdate objects with execution details
+
+        Example:
+            for update in agent.stream_observe("What is Python?"):
+                if update.is_agent_start:
+                    print(f"[START] Agent {update.agent} starting...")
+                elif update.is_token:
+                    print(update.content, end="", flush=True)
+                elif update.is_agent_end:
+                    print(f"\\n[DONE] {update.tokens} tokens, ${update.cost:.6f}")
+        """
+        from peargent.core.streaming import StreamUpdate, UpdateType
+        import time
+
+        # Yield agent start event
+        yield StreamUpdate(
+            type=UpdateType.AGENT_START,
+            agent=self.name,
+            metadata={"input": input_data}
+        )
+
+        start_time = time.time()
+
+        # Check if model supports streaming
+        if not hasattr(self.model, 'stream'):
+            # Fallback to non-streaming
+            result = self.run(input_data)
+            yield StreamUpdate(type=UpdateType.TOKEN, content=result, agent=self.name)
+            yield StreamUpdate(
+                type=UpdateType.AGENT_END,
+                agent=self.name,
+                metadata={
+                    "duration": time.time() - start_time,
+                    "tokens": 0,
+                    "cost": 0.0
+                }
+            )
+            return
+
+        # Initialize
+        self.temporary_memory = []
+
+        # Trace initialize
+        trace = None
+        tracer = get_tracer() if self.tracing else None
+        if tracer and tracer.enabled:
+            from peargent.observability import get_session_id, get_user_id
+            session_id = get_session_id()
+            user_id = get_user_id()
+
+            trace_id = tracer.start_trace(
+                agent_name=self.name,
+                input_data=input_data,
+                session_id=session_id,
+                user_id=user_id
+            )
+            trace = tracer.get_trace(trace_id)
+
+        # Ensure thread exists if using history
+        if self.history and not self.history.current_thread_id:
+            self.history.create_thread(f"{self.name}_thread")
+
+        # Add user message to memory
+        self.temporary_memory.append({
+            "role": "user",
+            "content": input_data
+        })
+
+        # Build initial prompt
+        prompt = self._build_initial_prompt(input_data)
+
+        # Start span for streaming
+        span = None
+        if tracer and tracer.enabled:
+            span = tracer.start_span(SpanType.LLM_CALL, "LLM Call (streaming)")
+
+        try:
+            # Collect the full response while streaming
+            full_response = ""
+
+            # Stream the response and yield token updates
+            for chunk in self.model.stream(prompt):
+                full_response += chunk
+                yield StreamUpdate(
+                    type=UpdateType.TOKEN,
+                    content=chunk,
+                    agent=self.name
+                )
+
+            # Add to temporary memory
+            self.temporary_memory.append({
+                "role": "assistant",
+                "content": full_response
+            })
+
+            # Track tokens and cost
+            tokens = 0
+            cost = 0.0
+            if span:
+                cost_tracker = get_cost_tracker()
+                model_name = getattr(self.model, 'model_name', None) or getattr(self.model, 'model', 'unknown')
+                try:
+                    prompt_tokens, completion_tokens, cost = cost_tracker.count_and_calculate(
+                        prompt=prompt,
+                        completion=full_response,
+                        model=model_name
+                    )
+                    tokens = prompt_tokens + completion_tokens
+                    span.set_llm_data(prompt=prompt, response=full_response, model=model_name)
+                    span.set_tokens(prompt_tokens, completion_tokens, cost)
+                except Exception:
+                    span.set_llm_data(prompt=prompt, response=full_response, model=model_name)
+
+            # End span
+            if tracer and tracer.enabled and span:
+                tracer.end_span()
+
+            # Sync to history
+            self._sync_to_history()
+
+            # End trace
+            if tracer and tracer.enabled and trace:
+                tracer.end_trace(trace.trace_id, output=full_response)
+
+            # Yield agent end event
+            yield StreamUpdate(
+                type=UpdateType.AGENT_END,
+                agent=self.name,
+                metadata={
+                    "duration": time.time() - start_time,
+                    "tokens": tokens,
+                    "cost": cost,
+                    "output": full_response
+                }
+            )
+
+        except Exception as e:
+            # End span with error
+            if tracer and tracer.enabled and span:
+                tracer.end_span(error=e)
+
+            # Sync history even on error
+            self._sync_to_history()
+
+            # End trace with error
+            if tracer and tracer.enabled and trace:
+                tracer.end_trace(trace.trace_id, error=e)
+
+            # Yield error event
+            yield StreamUpdate(
+                type=UpdateType.ERROR,
+                agent=self.name,
+                metadata={"error": str(e)}
+            )
+
+            raise e
+
+    async def astream(self, input_data: str):
+        """
+        Async version of stream() - Stream agent's response asynchronously.
+
+        True async streaming that yields chunks as they arrive in real-time,
+        not buffered.
+
+        Args:
+            input_data: User input/query
+
+        Yields:
+            String chunks of the agent's response
+
+        Example:
+            async for chunk in agent.astream("Tell me a story"):
+                print(chunk, end="", flush=True)
+        """
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        import queue
+
+        # Create a queue to pass chunks from thread to async
+        chunk_queue = queue.Queue()
+        exception_holder = []
+
+        def run_stream_in_thread():
+            """Run the sync stream in a thread and put chunks in queue"""
+            try:
+                for chunk in self.stream(input_data):
+                    chunk_queue.put(('chunk', chunk))
+                chunk_queue.put(('done', None))
+            except Exception as e:
+                exception_holder.append(e)
+                chunk_queue.put(('error', e))
+
+        # Start streaming in background thread
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(run_stream_in_thread)
+
+        # Yield chunks as they arrive
+        try:
+            while True:
+                # Check queue with small timeout to allow async cooperation
+                try:
+                    msg_type, data = await asyncio.get_event_loop().run_in_executor(
+                        None, chunk_queue.get, True, 0.01
+                    )
+
+                    if msg_type == 'chunk':
+                        yield data
+                    elif msg_type == 'done':
+                        break
+                    elif msg_type == 'error':
+                        raise data
+                except queue.Empty:
+                    # Allow other async tasks to run
+                    await asyncio.sleep(0)
+                    continue
+        finally:
+            executor.shutdown(wait=False)
+
+    async def astream_observe(self, input_data: str):
+        """
+        Async version of stream_observe() - Stream agent execution asynchronously with metadata.
+
+        True async streaming that yields updates as they arrive in real-time,
+        not buffered.
+
+        Args:
+            input_data: User input/query
+
+        Yields:
+            StreamUpdate objects with execution details
+
+        Example:
+            async for update in agent.astream_observe("What is Python?"):
+                if update.is_agent_start:
+                    print(f"Agent {update.agent} starting...")
+                elif update.is_token:
+                    print(update.content, end="", flush=True)
+                elif update.is_agent_end:
+                    print(f"Done! {update.tokens} tokens, ${update.cost:.6f}")
+        """
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        import queue
+
+        # Create a queue to pass updates from thread to async
+        update_queue = queue.Queue()
+        exception_holder = []
+
+        def run_observe_in_thread():
+            """Run the sync stream_observe in a thread and put updates in queue"""
+            try:
+                for update in self.stream_observe(input_data):
+                    update_queue.put(('update', update))
+                update_queue.put(('done', None))
+            except Exception as e:
+                exception_holder.append(e)
+                update_queue.put(('error', e))
+
+        # Start streaming in background thread
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(run_observe_in_thread)
+
+        # Yield updates as they arrive
+        try:
+            while True:
+                # Check queue with small timeout to allow async cooperation
+                try:
+                    msg_type, data = await asyncio.get_event_loop().run_in_executor(
+                        None, update_queue.get, True, 0.01
+                    )
+
+                    if msg_type == 'update':
+                        yield data
+                    elif msg_type == 'done':
+                        break
+                    elif msg_type == 'error':
+                        raise data
+                except queue.Empty:
+                    # Allow other async tasks to run
+                    await asyncio.sleep(0)
+                    continue
+        finally:
+            executor.shutdown(wait=False)
 
     def _parse_tool_call(self, llm_output: str) -> Optional[Dict[str, Any]]:
         """

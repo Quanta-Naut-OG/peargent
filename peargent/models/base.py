@@ -1,7 +1,7 @@
 # peargent/models/base.py
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Iterator, AsyncIterator
 
 class BaseModel(ABC):
     """
@@ -17,7 +17,43 @@ class BaseModel(ABC):
         """Generate a text completion from the prompt."""
         pass
 
+    def stream(self, prompt: str) -> Iterator[str]:
+        """
+        Stream text completion, yielding chunks as they arrive.
+
+        Default implementation falls back to non-streaming.
+        Models that support streaming should override this method.
+
+        Args:
+            prompt: The input prompt
+
+        Yields:
+            String chunks of the generated text
+        """
+        # Default fallback: yield entire response at once
+        response = self.generate(prompt)
+        yield response
+
     async def agenerate(self, prompt: str) -> str:
         """Async version of the generate method."""
         from asyncio import to_thread
         return await to_thread(self.generate, prompt)
+
+    async def astream(self, prompt: str) -> AsyncIterator[str]:
+        """
+        Async version of stream method.
+
+        Default implementation wraps sync stream in async.
+        Models with native async streaming should override this.
+
+        Args:
+            prompt: The input prompt
+
+        Yields:
+            String chunks of the generated text
+        """
+        from asyncio import to_thread
+
+        # Run stream in thread and yield results
+        for chunk in await to_thread(lambda: list(self.stream(prompt))):
+            yield chunk

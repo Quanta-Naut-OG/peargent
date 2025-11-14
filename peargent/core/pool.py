@@ -125,3 +125,302 @@ class Pool:
             
         final = next((m["content"] for m in reversed(self.state.history) if m["role"] == "assistant"), "")
         return final
+
+    def stream(self, user_input: str):
+        """
+        Stream the pool execution, yielding chunks from each agent.
+
+        Only streams the final agent's output. For full observability
+        of all agents, use observe() instead.
+
+        Args:
+            user_input: The initial user request
+
+        Yields:
+            String chunks from the final agent's response
+
+        Example:
+            for chunk in pool.stream("Explain AI"):
+                print(chunk, end="", flush=True)
+        """
+        self.state.add_message(role="user", content=user_input, agent=None)
+
+        last_result = None
+        call_count = 0
+        current_input = user_input
+
+        while call_count < self.max_iter:
+
+            if hasattr(self.router, "decide"):
+                route_name = self.router.decide(self.state, last_result=last_result)
+                route = RouterResult(route_name)
+            else:
+                route = self.router(self.state, call_count=call_count, last_result=last_result)
+
+            if not route or route.next_agent_name is None:
+                break
+
+            agent = self.agents_dict.get(route.next_agent_name)
+            if not agent:
+                raise ValueError(f"Router selected unknown agent '{route.next_agent_name}'")
+
+            # Check if this is the last agent
+            is_last = call_count == self.max_iter - 1
+
+            if is_last or not hasattr(agent, 'stream'):
+                # Stream the final agent's output
+                if hasattr(agent, 'stream'):
+                    full_output = ""
+                    for chunk in agent.stream(current_input):
+                        full_output += chunk
+                        yield chunk
+
+                    output = full_output
+                else:
+                    output = agent.run(current_input)
+                    yield output
+            else:
+                # Run intermediate agents normally
+                output = agent.run(current_input)
+
+            # Store agent output in shared state
+            self.state.add_message("assistant", str(output), agent=agent.name)
+            last_result = {
+                "agent": agent.name,
+                "output": output,
+                "tools_used": [m['content']['name'] for m in agent.temporary_memory if m.get('role') == 'tool'] if hasattr(agent, 'temporary_memory') else []
+            }
+
+            # Set the output as input for the next agent
+            current_input = str(output)
+            call_count += 1
+
+    def stream_observe(self, user_input: str):
+        """
+        Stream the entire pool execution with rich updates and metadata.
+
+        Yields StreamUpdate objects for every agent in the pool,
+        including start/end events, tokens, and costs.
+
+        Args:
+            user_input: The initial user request
+
+        Yields:
+            StreamUpdate objects with execution details
+
+        Example:
+            for update in pool.stream_observe("Explain AI"):
+                if update.is_agent_start:
+                    print(f"\\n[{update.agent}] Starting...")
+                elif update.is_token:
+                    print(update.content, end="", flush=True)
+                elif update.is_agent_end:
+                    print(f"\\n[{update.agent}] {update.tokens} tokens, ${update.cost:.6f}")
+                elif update.type == UpdateType.POOL_END:
+                    print(f"\\n\\nPool complete!")
+        """
+        from peargent.core.streaming import StreamUpdate, UpdateType
+        import time
+
+        # Yield pool start event
+        yield StreamUpdate(
+            type=UpdateType.POOL_START,
+            metadata={"input": user_input, "max_iter": self.max_iter}
+        )
+
+        pool_start_time = time.time()
+        total_tokens = 0
+        total_cost = 0.0
+
+        self.state.add_message(role="user", content=user_input, agent=None)
+
+        last_result = None
+        call_count = 0
+        current_input = user_input
+
+        while call_count < self.max_iter:
+
+            if hasattr(self.router, "decide"):
+                route_name = self.router.decide(self.state, last_result=last_result)
+                route = RouterResult(route_name)
+            else:
+                route = self.router(self.state, call_count=call_count, last_result=last_result)
+
+            if not route or route.next_agent_name is None:
+                break
+
+            agent = self.agents_dict.get(route.next_agent_name)
+            if not agent:
+                raise ValueError(f"Router selected unknown agent '{route.next_agent_name}'")
+
+            # Stream this agent with stream_observe() if available
+            if hasattr(agent, 'stream_observe'):
+                full_output = ""
+                agent_tokens = 0
+                agent_cost = 0.0
+
+                for update in agent.stream_observe(current_input):
+                    # Forward the update
+                    yield update
+
+                    # Collect metadata
+                    if update.is_token and update.content:
+                        full_output += update.content
+                    elif update.is_agent_end:
+                        agent_tokens = update.tokens or 0
+                        agent_cost = update.cost or 0.0
+                        total_tokens += agent_tokens
+                        total_cost += agent_cost
+
+                output = full_output
+            else:
+                # Fallback to run() if stream_observe() not available
+                yield StreamUpdate(
+                    type=UpdateType.AGENT_START,
+                    agent=agent.name,
+                    metadata={"input": current_input}
+                )
+
+                output = agent.run(current_input)
+
+                yield StreamUpdate(
+                    type=UpdateType.TOKEN,
+                    content=output,
+                    agent=agent.name
+                )
+
+                yield StreamUpdate(
+                    type=UpdateType.AGENT_END,
+                    agent=agent.name,
+                    metadata={
+                        "tokens": 0,
+                        "cost": 0.0,
+                        "output": output
+                    }
+                )
+
+            # Store agent output in shared state
+            self.state.add_message("assistant", str(output), agent=agent.name)
+            last_result = {
+                "agent": agent.name,
+                "output": output,
+                "tools_used": [m['content']['name'] for m in agent.temporary_memory if m.get('role') == 'tool'] if hasattr(agent, 'temporary_memory') else []
+            }
+
+            # Set the output as input for the next agent
+            current_input = str(output)
+            call_count += 1
+
+        # Yield pool end event
+        yield StreamUpdate(
+            type=UpdateType.POOL_END,
+            metadata={
+                "duration": time.time() - pool_start_time,
+                "total_tokens": total_tokens,
+                "total_cost": total_cost,
+                "agents_executed": call_count
+            }
+        )
+
+    async def astream(self, user_input: str):
+        """
+        Async version of stream() - Stream pool execution asynchronously.
+
+        Args:
+            user_input: The initial user request
+
+        Yields:
+            String chunks from the final agent's response
+
+        Example:
+            async for chunk in pool.astream("Explain AI"):
+                print(chunk, end="", flush=True)
+        """
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        import queue
+
+        chunk_queue = queue.Queue()
+
+        def run_stream_in_thread():
+            try:
+                for chunk in self.stream(user_input):
+                    chunk_queue.put(('chunk', chunk))
+                chunk_queue.put(('done', None))
+            except Exception as e:
+                chunk_queue.put(('error', e))
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(run_stream_in_thread)
+
+        try:
+            while True:
+                try:
+                    msg_type, data = await asyncio.get_event_loop().run_in_executor(
+                        None, chunk_queue.get, True, 0.01
+                    )
+                    if msg_type == 'chunk':
+                        yield data
+                    elif msg_type == 'done':
+                        break
+                    elif msg_type == 'error':
+                        raise data
+                except queue.Empty:
+                    await asyncio.sleep(0)
+                    continue
+        finally:
+            executor.shutdown(wait=False)
+
+    async def astream_observe(self, user_input: str):
+        """
+        Async version of stream_observe() - Stream pool execution asynchronously with metadata.
+
+        Args:
+            user_input: The initial user request
+
+        Yields:
+            StreamUpdate objects with execution details
+
+        Example:
+            async for update in pool.astream_observe("Explain AI"):
+                if update.is_agent_start:
+                    print(f"[{update.agent}] Starting...")
+                elif update.is_token:
+                    print(update.content, end="", flush=True)
+                elif update.is_agent_end:
+                    print(f"[{update.agent}] Done! {update.tokens} tokens")
+        """
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        import queue
+
+        update_queue = queue.Queue()
+
+        def run_observe_in_thread():
+            try:
+                for update in self.stream_observe(user_input):
+                    update_queue.put(('update', update))
+                update_queue.put(('done', None))
+            except Exception as e:
+                update_queue.put(('error', e))
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(run_observe_in_thread)
+
+        try:
+            while True:
+                try:
+                    msg_type, data = await asyncio.get_event_loop().run_in_executor(
+                        None, update_queue.get, True, 0.01
+                    )
+                    if msg_type == 'update':
+                        yield data
+                    elif msg_type == 'done':
+                        break
+                    elif msg_type == 'error':
+                        raise data
+                except queue.Empty:
+                    await asyncio.sleep(0)
+                    continue
+        finally:
+            executor.shutdown(wait=False)
