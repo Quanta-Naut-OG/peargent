@@ -65,8 +65,8 @@ export default function HomePage() {
 
           {/* Subheadline */}
           <p className="max-w-2xl text-lg sm:text-xl text-gray-700 mb-10 leading-relaxed font-medium">
-            A modern, type-safe Python framework for building intelligent,
-            production-grade AI agents with built-in memory and observability.
+            A refined, simple approach to building intelligent agents in Python,
+            designed for real-world use.
           </p>
 
           {/* CTA Section */}
