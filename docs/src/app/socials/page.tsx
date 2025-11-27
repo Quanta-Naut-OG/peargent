@@ -144,25 +144,17 @@ export default function SocialsPage() {
                     <div className="space-y-4">
                         {links.map((link, index) => {
                             const isComingSoon = link.comingSoon;
-                            const Wrapper = isComingSoon ? 'div' : Link;
-                            // @ts-ignore - Dynamic component props
-                            const props = isComingSoon ? {} : {
-                                href: link.url,
-                                target: link.url.startsWith('http') ? "_blank" : undefined,
-                                rel: link.url.startsWith('http') ? "noopener noreferrer" : undefined
-                            };
 
-                            return (
-                                <Wrapper
-                                    key={link.name}
-                                    {...props}
-                                    className={cn(
-                                        "group relative flex items-center p-4 rounded-xl shadow-sm hover:shadow-lg transition-all duration-300 ease-out transform overflow-hidden border-2 border-black",
-                                        mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8",
-                                        isComingSoon ? "cursor-default" : "cursor-pointer"
-                                    )}
-                                    style={{ transitionDelay: `${index * 100 + 200}ms` }}
-                                >
+                            const commonClasses = cn(
+                                "group relative flex items-center p-4 rounded-xl shadow-sm hover:shadow-lg transition-all duration-300 ease-out transform overflow-hidden border-2 border-black",
+                                mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8",
+                                isComingSoon ? "cursor-default" : "cursor-pointer"
+                            );
+
+                            const commonStyle = { transitionDelay: `${index * 100 + 200}ms` };
+
+                            const content = (
+                                <>
                                     {/* Background Image */}
                                     <div className="absolute inset-0 z-0">
                                         <Image
@@ -197,7 +189,32 @@ export default function SocialsPage() {
                                             <span className="text-[10px] font-bold text-white uppercase tracking-wider">Coming Soon</span>
                                         </div>
                                     )}
-                                </Wrapper>
+                                </>
+                            );
+
+                            if (isComingSoon) {
+                                return (
+                                    <div
+                                        key={link.name}
+                                        className={commonClasses}
+                                        style={commonStyle}
+                                    >
+                                        {content}
+                                    </div>
+                                );
+                            }
+
+                            return (
+                                <Link
+                                    key={link.name}
+                                    href={link.url}
+                                    target={link.url.startsWith('http') ? "_blank" : undefined}
+                                    rel={link.url.startsWith('http') ? "noopener noreferrer" : undefined}
+                                    className={commonClasses}
+                                    style={commonStyle}
+                                >
+                                    {content}
+                                </Link>
                             );
                         })}
                     </div>
