@@ -43,7 +43,7 @@ class TestToolCreation:
 
         assert tool.name == "greet"
         assert "name" in tool.input_parameters
-        assert tool.input_parameters["name"] == str
+        assert tool.input_parameters["name"] is str
 
     def test_create_tool_without_parameters(self) -> None:
         """Test creating a tool with no input parameters."""
@@ -74,9 +74,9 @@ class TestToolCreation:
             call_function=multi_type_func,
         )
 
-        assert tool.input_parameters["name"] == str
-        assert tool.input_parameters["age"] == int
-        assert tool.input_parameters["active"] == bool
+        assert tool.input_parameters["name"] is str
+        assert tool.input_parameters["age"] is int
+        assert tool.input_parameters["active"] is bool
 
 
 class TestToolExecution:
