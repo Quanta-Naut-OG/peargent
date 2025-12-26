@@ -47,10 +47,10 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/Quanta-Naut/peargent"
+"Homepage" = "https://github.com/Peargent/peargent"
 "Documentation" = "https://your-docs-url-here"
-"Bug Tracker" = "https://github.com/Quanta-Naut/peargent/issues"
-"Source Code" = "https://github.com/Quanta-Naut/peargent"
+"Bug Tracker" = "https://github.com/Peargent/peargent/issues"
+"Source Code" = "https://github.com/Peargent/peargent"
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "flake8"]
